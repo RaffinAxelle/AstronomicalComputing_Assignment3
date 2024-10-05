@@ -4,13 +4,14 @@ from matplotlib.colors import LogNorm
 from astropy.io import fits
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
-import statsmodels.api as sm  # For calculating uncertainties
+import statsmodels.api as sm
+from scipy.stats import binned_statistic_2d
+
 
 # Load the FITS file
 fits_file = 'nihao_uhd_simulation_g8.26e11_xyz_positions_and_oxygen_ao.fits'
 with fits.open(fits_file) as hdul:
-    # Assuming the data is in the first Binary Table HDU (index 1)
-    data = hdul[1].data  # This will give you a FITS_rec object
+    data = hdul[1].data  # This gives a FITS_rec object
 
 # Convert FITS_rec to a NumPy array
 numpy_array = np.array(data)
@@ -18,21 +19,28 @@ numpy_array = np.array(data)
 # Initialize lists for A_O and RGal
 A_O_list = []
 RGal_list = []
+x_list = []
+y_list = []
 
-# Use a single loop to extract A_O and calculate RGal
-for i in range(len(numpy_array)):  # Loop through each row
-    A_O_list.append(numpy_array[i][3])  # Access the 4th element (index 3)
-    x = numpy_array[i][0]  # First column
-    y = numpy_array[i][1]  # Second column
-    z = numpy_array[i][2]  # Third column
+# Use a loop to extract A_O and calculate RGal
+for i in range(len(numpy_array)):
+    A_O_list.append(numpy_array[i][3])
+    x = numpy_array[i][0]
+    y = numpy_array[i][1]
+    z = numpy_array[i][2]
+    x_list.append(x)
+    y_list.append(y)
     RGal_list.append(np.sqrt(x**2 + y**2 + z**2))  # Calculate RGal
 
 # Convert lists to NumPy arrays
 A_O = np.array(A_O_list)
 RGal = np.array(RGal_list)
+x_array = np.array(x_list)
+y_array = np.array(y_list)
 
-# Calculate density for coloring using a 2D histogram with fewer bins for better density representation
-hist, xedges, yedges = np.histogram2d(RGal, A_O, bins=1000)
+# Calculate density for coloring using a 2D histogram
+num_bins = 1000
+hist, xedges, yedges = np.histogram2d(RGal, A_O, bins=num_bins)
 
 # Use np.digitize to find bin indices for RGal and A_O
 x_indices = np.digitize(RGal, xedges) - 1  # Subtracting 1 for zero-based indexing
@@ -45,14 +53,14 @@ y_indices = np.clip(y_indices, 0, hist.shape[1] - 1)
 # Create an array of densities for each point based on histogram counts
 density_values = hist[x_indices, y_indices]
 
-# Plotting: Create a 2-panel figure with color mapping for density
+# Create a 2-panel figure for the plotting
 fig, axs = plt.subplots(2, 1, figsize=(10, 10))
 
 # Logarithmic density plot of A_O vs. RGal with color mapping based on density
 sc = axs[0].scatter(RGal, A_O, c=density_values, norm=LogNorm(), cmap='viridis', alpha=0.5, s=1)
 axs[0].set_xlabel('RGal (kpc)')
 axs[0].set_ylabel('A(O)')
-axs[0].set_title('Logarithmic Density Plot of RGal vs A(O)')
+axs[0].set_title('Logarithmic Density Plot of RGal vs A(O), bins = '+str(num_bins))
 plt.colorbar(sc, ax=axs[0], label='Density (log scale)')
 
 # Fit a linear model to the data using sklearn
@@ -88,16 +96,16 @@ axs[1].axhline(0, color='red', linestyle='--', label='Zero Residual')
 axs[1].set_xscale('log')
 axs[1].set_xlabel('RGal (kpc)')
 axs[1].set_ylabel('ΔA(O)')
-axs[1].set_title('Residuals of Fit: RGal vs ΔA(O)')
+axs[1].set_title('Residuals of Fit: RGal vs ΔA(O), bins = '+str(num_bins))
 axs[1].legend()
 
 plt.tight_layout()
 plt.savefig('figures/log_density_plot.png', dpi=200)
-plt.show()
+# plt.show()
 
 # Report intercept and slope with uncertainties in console output as well.
 print(f"Intercept: {intercept:.4f} ± {intercept_std_err:.4f}")
-print(f"Slope: {slope:.5f} ± {slope_std_err:.5f}")
+print(f"Slope: {slope:.5f} ± {slope_std_err:.5f}")  # 5 significative numbers because the uncertainty on the slope is really small
 
 # Calculate RMSE for goodness of fit
 rmse = np.sqrt(mean_squared_error(y, y_pred))
@@ -116,47 +124,40 @@ rmse_filtered = np.sqrt(mean_squared_error(filtered_A_O, filtered_y_pred))
 print(f"Root Mean Squared Error for RGal > 10 kpc: {rmse_filtered:.4f}")
 
 
+fig, axs = plt.subplots(1, 3, figsize=(20, 8), sharex=True, sharey=True)
+num_bins = 1000
 
-# Define bins for histogram
-num_bins = 500
-x_bins = np.linspace(min(RGal), max(RGal), num_bins)  # Range of RGal
-y_bins_AO = np.linspace(min(A_O), max(A_O), num_bins)  # Range of A(O)
-y_bins_res = np.linspace(min(residuals), max(residuals), num_bins)  # Range of residuals
+# First panel: 2D histogram (binned stats) colored by median simulated A(O)
+bin_stat_mean, xedges, yedges, binnumber = binned_statistic_2d(x_array, y_array, A_O, statistic='median', bins=num_bins)
+im = axs[0].imshow(bin_stat_mean.T, origin='lower', aspect='auto',
+                   extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+                   cmap='RdYlBu')
+axs[0].set_title("Median simulated A(O), bins = "+str(num_bins))
+axs[0].set_xlabel("X")
+axs[0].set_ylabel("Y")
+plt.colorbar(im, ax=axs[0], label="Median of A(O)", orientation='horizontal')
 
-# (a) 2D-histogram of the median simulated A(O)
-hist_median_AO, xedges, yedges = np.histogram2d(RGal, A_O, bins=[x_bins, y_bins_AO])
-median_AO = np.median(A_O)
+# Second panel: 2D histogram (binned stats) colored by median fitted A(O)
+bin_stat_mean, xedges, yedges, binnumber = binned_statistic_2d(x_array, y_array, y_pred, statistic='median', bins=num_bins)
+im = axs[1].imshow(bin_stat_mean.T, origin='lower', aspect='auto',
+                   extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+                   cmap='RdYlBu')
+axs[1].set_title("Median fitted A(O), bins = "+str(num_bins))
+axs[1].set_xlabel("X")
+axs[1].set_ylabel("Y")
+plt.colorbar(im, ax=axs[1], label="Median of A(O)", orientation='horizontal')
 
-# (b) 2D-histogram of the median fitted A(O)
-hist_median_fitted_AO, _, _ = np.histogram2d(RGal, y_pred, bins=[x_bins, y_bins_AO])
-median_fitted_AO = np.median(y_pred)
+# Third panel: 2D histogram (binned stats) colored by median residuals A(O)
+bin_stat_mean, xedges, yedges, binnumber = binned_statistic_2d(x_array, y_array, residuals, statistic='median', bins=num_bins)
+im = axs[2].imshow(bin_stat_mean.T, origin='lower', aspect='auto',
+                   extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+                   cmap='RdYlBu')
+axs[2].set_title("Median residuals A(O), bins = "+str(num_bins))
+axs[2].set_xlabel("X")
+axs[2].set_ylabel("Y")
+plt.colorbar(im, ax=axs[2], label="Median of A(O)", orientation='horizontal')
 
-# (c) 2D-histogram of the median residuals ΔA(O)
-hist_median_residuals, _, _ = np.histogram2d(RGal, residuals, bins=[x_bins, y_bins_res])
-median_residuals = np.median(residuals)
-
-# Create a figure with three subplots
-fig, axs = plt.subplots(3, 1, figsize=(10, 15))
-
-# Plotting the histograms
-c1 = axs[0].imshow(hist_median_AO.T, origin='lower', aspect='auto', extent=[x_bins[0], x_bins[-1], y_bins_AO[0], y_bins_AO[-1]], cmap='viridis')
-axs[0].set_title('2D Histogram of Median Simulated A(O)')
-axs[0].set_xlabel('RGal (kpc)')
-axs[0].set_ylabel('A(O)')
-plt.colorbar(c1, ax=axs[0], label='Counts')
-
-c2 = axs[1].imshow(hist_median_fitted_AO.T, origin='lower', aspect='auto', extent=[x_bins[0], x_bins[-1], y_bins_AO[0], y_bins_AO[-1]], cmap='viridis')
-axs[1].set_title('2D Histogram of Median Fitted A(O)')
-axs[1].set_xlabel('RGal (kpc)')
-axs[1].set_ylabel('Fitted A(O)')
-plt.colorbar(c2, ax=axs[1], label='Counts')
-
-c3 = axs[2].imshow(hist_median_residuals.T, origin='lower', aspect='auto', extent=[x_bins[0], x_bins[-1], y_bins_res[0], y_bins_res[-1]], cmap='viridis')
-axs[2].set_title('2D Histogram of Median Residuals ΔA(O)')
-axs[2].set_xlabel('RGal (kpc)')
-axs[2].set_ylabel('Residuals ΔA(O)')
-plt.colorbar(c3, ax=axs[2], label='Counts')
-
+# Show plot
 plt.tight_layout()
 plt.savefig('figures/3_panel_histograms_'+str(num_bins)+'.png', dpi=200)
 plt.show()
